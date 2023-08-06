@@ -18,7 +18,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.slf4j.Logger;
@@ -162,13 +161,13 @@ public class ShipTest extends AbstractBaseIntegrationTest {
     @Test
     @Disabled
     // Я подумал, что запись с кораблем с датой постройки большей, тем текущая, будет некорректной.
-    // Но бд позволяет сохранять такие записи.
-    // Так как нет бизнес правил, то непонятно, являются ли такие записи корректными
-    public void testSaveFutureDate() {
+    // Но так как нет бизнес правил, то непонятно, являются ли такие записи корректными
+    // Тест не будет проходить, так как нет таких ограничений на дату
+    public void testSaveFutureCreatedAt() {
         Instant futureInstantDate = LocalDateTime.now().plusDays(1).atZone(ZoneOffset.UTC).toInstant();
-        Ship shipWithFutureDate = tuple.toBuilder().createdAt(futureInstantDate).build();
+        Ship shipWithFutureCreatedAt = tuple.toBuilder().createdAt(futureInstantDate).build();
 
-        assertThrows(DataRetrievalFailureException.class, () -> repository.save(shipWithFutureDate));
+        assertThrows(DataRetrievalFailureException.class, () -> repository.save(shipWithFutureCreatedAt));
     }
 
     @Test
@@ -204,5 +203,45 @@ public class ShipTest extends AbstractBaseIntegrationTest {
         }
 
         assertEquals(expectedCount, count);
+    }
+
+    @Test
+    @Disabled
+    // @RepeatedTest(10)
+    // Поскольку Tarantool по умолчанию не обеспечивает механизмов для обработки многопоточности,
+    // такой тест не будет проходить
+    public void testConcurrentUpdateShip() throws ExecutionException, InterruptedException {
+        // Given
+        Ship savedShip = repository.save(tuple);
+        int gunsCountBefore = savedShip.getGunsCount();
+        int threadsCount = 5;
+
+        ExecutorService executorService = Executors.newFixedThreadPool(threadsCount);
+        Callable<Void> updateTask = () -> {
+            Ship shipToUpdate = repository.findById(savedShip.getId()).orElseThrow(IllegalStateException::new);
+            shipToUpdate.setGunsCount(shipToUpdate.getGunsCount() + 1);
+            repository.save(shipToUpdate);
+            return null;
+        };
+
+        // When
+        List<Future<Void>> futures = new ArrayList<>();
+
+        try {
+            for (int i = 0; i < threadsCount; i++) {
+                Future<Void> future = executorService.submit(updateTask);
+                futures.add(future);
+            }
+
+            for (Future<Void> future : futures) {
+                future.get();
+            }
+        } finally {
+            executorService.shutdown();
+        }
+
+        // Then
+        Ship updatedShip = repository.findById(savedShip.getId()).orElseThrow(IllegalStateException::new);
+        assertEquals(gunsCountBefore + threadsCount, updatedShip.getGunsCount());
     }
 }
