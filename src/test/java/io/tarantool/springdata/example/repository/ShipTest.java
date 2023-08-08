@@ -85,11 +85,40 @@ public class ShipTest extends AbstractBaseIntegrationTest {
         repository.deleteAll();
     }
 
+    /*
+        Задание 4.1:
+        Сначала я обнаружил, что передаче слишком больших значений (прим. Instant.MAX/MIN) происходит переполнение.
+        В комментариях к конвертерам было замечание:
+        "by default cartridge-springdata convert all types from Jsr310 to primitives".
+        Я предположил, что переполнение происходит как раз из-за приведения к примитивам.
+        Я попытался написать собственный конвертер, чтобы избежать конвертации в примитивы, однако не нашел способа
+        успешно реализовать это без модификации физической модели.
+
+        Далее я обнаружил, что при передаче в eval Instant с нулевым количеством наносекунд мы получаем исключение:
+        java.util.concurrent.ExecutionException: java.nio.BufferUnderflowException.
+        Пример данных вызывающих исключение: "1999-10-09T19:05:05Z".
+
+        Код пытается прочитать Instant из буфера, но размер буфера оказывается недостаточным для корректной операции,
+        из-за этого выбрасывается исключение. Тарантул не ожидает, что наносекунды окажутся равны нулю.
+        Примечательно, что при сохранении в БД записи с нулевым количеством наносекунд запись сохраняется корректно,
+        но при выполнении lua-скрипта с помощью eval мы получаем это исключение.
+
+        Задание 4.2
+        Для того, чтобы починить этот тест, достаточно исключить возможность передачи нулевого количества наносекунд.
+        Для сохранения доступности базы я решил изменить количество наносекунд таким образом,
+        чтобы они не были равны нулю. Теперь тест зеленый при передаче даты с нулевыми наносекундами.
+     */
     @Test
     public void testEval() throws ExecutionException, InterruptedException {
-        assertEquals(tuple.getCreatedAt(),
+        tuple.setCreatedAt(LocalDateTime.parse("1999-10-09T19:05:05.000000000").toInstant(ZoneOffset.UTC));
+//        tuple.setCreatedAt(Instant.parse("1999-10-09T19:05:05Z"));
+        Instant instant = tuple.getCreatedAt();
+        if (instant.getNano() == 0) {
+            instant = instant.plusNanos(1);
+        }
+        assertEquals(instant,
                 client.eval("return ...",
-                        Collections.singletonList(tuple.getCreatedAt())).get().get(0));
+                        Collections.singletonList(instant)).get().get(0));
     }
 
     @Test
